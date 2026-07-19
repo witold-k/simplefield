@@ -1,0 +1,12 @@
+[package]
+name = "simplefield"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# -- math --------------------------------------------------------------------
+# struct_extractors = { version = "0.1.0", path = "../struct_extractors" }
+struct_extractors = { version = "0.1.0", git = "https://github.com/witold-k/struct_extractors" }
+# lineariterator = { version = "0.1.0", path = "../lineariterator" }
+lineariterator = { version = "0.1.0", git = "https://github.com/witold-k/lineariterator.git" }
+
