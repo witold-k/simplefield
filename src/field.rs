@@ -1,53 +1,45 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Witold Kaminski
 
-use struct_extractors::extract_accessors;
-use lineariterator::niterator::NMutIterator;
 use crate::orientation::{ColumnMajor, Orientation, RowMajor};
+use lineariterator::niterator::NMutIterator;
+use struct_extractors::extract_accessors;
 
-/// An owned, multi-dimensional data field with compile-time layout orientation.
+/// An owned two-dimensional data field with compile-time layout orientation.
 ///
-/// `Field` allocates elements on the heap via a contiguous vector, mapping a 2D multi-index
-/// space onto linear storage based on the layout strategy type parameter `O`.
-///
-/// ### Dimension Concept
-/// Memory mapping relies on a decoupled dimension hierarchy:
-/// * **`dim0_size` (Inner Dimension):** The contiguous, fast-changing axis. Elements along this axis sit side-by-side in raw memory (pointer stride = 1).
-/// * **`dim1_size` (Outer Dimension):** The strided, slow-changing axis. Stepping through this axis requires jumping over segments of the inner dimension.
+/// `Field` stores exactly `row_count * column_count` initialized elements in a
+/// contiguous vector. `RowMajor` and `ColumnMajor` select how logical rows and
+/// columns map onto that storage.
 #[extract_accessors]
 #[derive(Debug, Clone, Hash)]
 pub struct Field<O, T>
 where
-    O: Orientation
+    O: Orientation,
 {
-    /// The size of the inner, fast-changing dimension in memory.
+    /// Size of the contiguous, fast-changing dimension.
     #[access(get)]
     dim0_size: usize,
 
-    /// The size of the outer, slow-changing dimension in memory.
+    /// Size of the strided, slow-changing dimension.
     #[access(get)]
     dim1_size: usize,
 
-    /// Contiguous heap allocation storing all multidimensional elements.
-    #[access(get_ref)]
+    /// Contiguous storage for all field elements.
     data: Vec<T>,
 
-    /// Compile-time phantom marker dictating layout math without runtime overhead.
-    _marker: std::marker::PhantomData<O>
+    _marker: std::marker::PhantomData<O>,
 }
 
 impl<O, T> Default for Field<O, T>
 where
     O: Orientation,
-    T: Clone
 {
-    /// Creates an empty field with zero dimensions and no memory allocations.
     fn default() -> Self {
         Self {
             dim0_size: 0,
             dim1_size: 0,
             data: Vec::new(),
-            _marker: std::marker::PhantomData
+            _marker: std::marker::PhantomData,
         }
     }
 }
@@ -55,172 +47,253 @@ where
 impl<O, T> Field<O, T>
 where
     O: Orientation,
-    T: Clone,
 {
-    /// Returns an immutable reference to the underlying linear vector allocation.
-    #[inline(always)]
-    pub fn get_data(&self) -> &Vec<T> {
+    /// Returns the underlying elements as a slice.
+    #[inline]
+    pub fn get_data(&self) -> &[T] {
         &self.data
     }
 }
 
-// ===========================================================================
-// IMPLEMENTATION FOR ROW-MAJOR (dim0 = columns, dim1 = rows)
-// ===========================================================================
-impl<T> Field<RowMajor, T>
-where
-    T: Clone,
-{
-    /// Creates an uninitialized row-major field reserving heap capacity for the specified grid size.
-    pub fn new(row_count: usize, column_count: usize) -> Self {
-        Self {
-            dim0_size: column_count, // cols are fast-changing
-            dim1_size: row_count,    // rows are slow-changing
-            data: Vec::with_capacity(row_count * column_count),
-            _marker: std::marker::PhantomData
-        }
+impl<T> Field<RowMajor, T> {
+    /// Returns the logical number of rows.
+    #[inline]
+    pub const fn row_count(&self) -> usize {
+        self.dim1_size
     }
 
-    /// Creates a row-major field where every coordinate is filled with clones of the provided element.
-    pub fn new_fill(row_count: usize, column_count: usize, data: T) -> Self {
-        let s = row_count * column_count;
-        let mut v = Vec::with_capacity(s);
-        v.resize(s, data);
-        Self {
-            dim0_size: column_count,
-            dim1_size: row_count,
-            data: v,
-            _marker: std::marker::PhantomData
-        }
-    }
-
-    /// Wraps an existing flat linear vector into a row-major layout configuration.
-    pub fn new_data(row_count: usize, column_count: usize, data: Vec<T>) -> Self {
-        Self {
-            dim0_size: column_count,
-            dim1_size: row_count,
-            data,
-            _marker: std::marker::PhantomData
-        }
-    }
-
-    /// Overwrites a subsection of an explicit row beginning at a specified column offset.
-    ///
-    /// # Safety
-    /// This method is unsafe as it performs unchecked direct pointer arithmetic to write values into memory.
-    /// Users must guarantee that the target range fits inside the field's allocated row boundaries.
-    pub fn set_row_cut(&mut self, row: usize, column: usize, new_row: &[T]) {
-        unsafe {
-            let start = self.data.as_mut_ptr().add(column + row * self.dim0_size);
-            let mut i = NMutIterator::new(start, self.dim0_size - column);
-            i.clone_from_slice(new_row);
-        }
-    }
-
-    /// Returns a zero-overhead, mutable linear iterator traversing the specified row index.
-    ///
-    /// Since rows are contiguous in row-major layout, this iterator sweeps sequentially with a stride of 1.
-    ///
-    /// # Safety
-    /// Relies on unchecked pointer calculations to find the row head.
-    pub fn row_mut_iterator(&mut self, row: usize) -> NMutIterator<'_, T> {
-        unsafe {
-            let start = self.data.as_mut_ptr().add(row * self.dim0_size);
-            NMutIterator::new(start, self.dim0_size)
-        }
-    }
-
-    /// Returns a zero-overhead, mutable strided iterator traversing the specified column index.
-    ///
-    /// Since column values are scattered in row-major layouts, this iterator hops with a step size equal to `dim0_size`.
-    ///
-    /// # Safety
-    /// Relies on unchecked pointer calculations to find the column head and execute strides.
-    pub fn column_mut_iterator(&mut self, column: usize) -> NMutIterator<'_, T> {
-        unsafe {
-            let start = self.data.as_mut_ptr().add(column);
-            NMutIterator::new_step(start, self.dim1_size, self.dim0_size)
-        }
+    /// Returns the logical number of columns.
+    #[inline]
+    pub const fn column_count(&self) -> usize {
+        self.dim0_size
     }
 }
 
+impl<T> Field<ColumnMajor, T> {
+    /// Returns the logical number of rows.
+    #[inline]
+    pub const fn row_count(&self) -> usize {
+        self.dim0_size
+    }
+
+    /// Returns the logical number of columns.
+    #[inline]
+    pub const fn column_count(&self) -> usize {
+        self.dim1_size
+    }
+}
+
+fn element_count(row_count: usize, column_count: usize) -> usize {
+    row_count
+        .checked_mul(column_count)
+        .expect("field dimensions overflow usize")
+}
+
+fn assert_data_len<T>(row_count: usize, column_count: usize, data: &[T]) {
+    let expected = element_count(row_count, column_count);
+    assert_eq!(
+        data.len(),
+        expected,
+        "data length does not match field dimensions"
+    );
+}
+
 // ===========================================================================
-// IMPLEMENTATION FOR COLUMN-MAJOR (dim0 = rows, dim1 = columns)
+// ROW-MAJOR (dim0 = columns, dim1 = rows)
 // ===========================================================================
-impl<T> Field<ColumnMajor, T>
-where
-    T: Clone,
-{
-    /// Creates an uninitialized column-major field reserving heap capacity for the specified grid size.
-    pub fn new(row_count: usize, column_count: usize) -> Self {
+impl<T> Field<RowMajor, T> {
+    /// Creates a row-major field filled with clones of `value`.
+    pub fn new_fill(row_count: usize, column_count: usize, value: T) -> Self
+    where
+        T: Clone,
+    {
+        let size = element_count(row_count, column_count);
         Self {
-            dim0_size: row_count,    // rows are fast-changing
-            dim1_size: column_count, // cols are slow-changing
-            data: Vec::with_capacity(row_count * column_count),
+            dim0_size: column_count,
+            dim1_size: row_count,
+            data: vec![value; size],
             _marker: std::marker::PhantomData,
         }
     }
 
-    /// Creates a column-major field where every coordinate is filled with clones of the provided element.
-    pub fn new_fill(row_count: usize, column_count: usize, data: T) -> Self {
-        let s = row_count * column_count;
-        let mut v = Vec::with_capacity(s);
-        v.resize(s, data);
-        Self {
-            dim0_size: row_count,
-            dim1_size: column_count,
-            data: v,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    /// Wraps an existing flat linear vector into a column-major layout configuration.
+    /// Wraps an existing flat vector in row-major layout.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dimensions overflow `usize` or if `data.len()` is not
+    /// exactly `row_count * column_count`.
     pub fn new_data(row_count: usize, column_count: usize, data: Vec<T>) -> Self {
+        assert_data_len(row_count, column_count, &data);
         Self {
-            dim0_size: row_count,
-            dim1_size: column_count,
+            dim0_size: column_count,
+            dim1_size: row_count,
             data,
             _marker: std::marker::PhantomData,
         }
     }
 
-    /// Overwrites a subsection of an explicit row beginning at a specified column offset.
+    /// Replaces part of a row starting at `column`.
     ///
-    /// # Safety
-    /// This method is unsafe as it performs unchecked strided pointer writes. Rows are not contiguous
-    /// in column-major configurations, so this operates using step logic.
-    pub fn set_row_cut(&mut self, row: usize, column: usize, new_row: &[T]) {
+    /// # Panics
+    ///
+    /// Panics if `row` is out of bounds, `column` is past the end of the row,
+    /// or `new_row` does not fit in the remaining columns.
+    pub fn set_row_cut(&mut self, row: usize, column: usize, new_row: &[T])
+    where
+        T: Clone,
+    {
+        assert!(row < self.dim1_size, "row index out of bounds");
+        assert!(column <= self.dim0_size, "column index out of bounds");
+        assert!(
+            new_row.len() <= self.dim0_size - column,
+            "row data exceeds remaining columns"
+        );
+
+        if new_row.is_empty() {
+            return;
+        }
+
         unsafe {
-            let start = self.data.as_mut_ptr().add(row + column * self.dim0_size);
-            let mut i = NMutIterator::new_step(start, self.dim1_size - column, self.dim0_size);
-            i.clone_from_slice(new_row);
+            let start = self
+                .data
+                .as_mut_ptr()
+                .add(row * self.dim0_size + column);
+            let mut iter = NMutIterator::new(start, new_row.len());
+            iter.clone_from_slice(new_row);
         }
     }
 
-    /// Returns a zero-overhead, mutable strided iterator traversing the specified row index.
+    /// Returns a mutable raw-pointer iterator over a row.
     ///
-    /// Since rows are scattered across memory in column-major layouts, this iterator hops with a step size equal to `dim0_size`.
+    /// # Panics
     ///
-    /// # Safety
-    /// Relies on unchecked pointer calculations to find the row head and execute strides.
+    /// Panics if `row` is out of bounds.
     pub fn row_mut_iterator(&mut self, row: usize) -> NMutIterator<'_, T> {
-        unsafe {
-            let start = self.data.as_mut_ptr().add(row);
-            NMutIterator::new_step(start, self.dim1_size, self.dim0_size)
-        }
+        assert!(row < self.dim1_size, "row index out of bounds");
+
+        let start = if self.dim0_size == 0 {
+            self.data.as_mut_ptr()
+        } else {
+            unsafe { self.data.as_mut_ptr().add(row * self.dim0_size) }
+        };
+
+        unsafe { NMutIterator::new(start, self.dim0_size) }
     }
 
-    /// Returns a zero-overhead, mutable linear iterator traversing the specified column index.
+    /// Returns a mutable raw-pointer iterator over a column.
     ///
-    /// Since columns are contiguous in column-major layout, this iterator sweeps sequentially with a stride of 1.
+    /// # Panics
     ///
-    /// # Safety
-    /// Relies on unchecked pointer calculations to find the column head.
+    /// Panics if `column` is out of bounds.
     pub fn column_mut_iterator(&mut self, column: usize) -> NMutIterator<'_, T> {
-        unsafe {
-            let start = self.data.as_mut_ptr().add(column * self.dim0_size);
-            NMutIterator::new(start, self.dim0_size)
-        }
+        assert!(column < self.dim0_size, "column index out of bounds");
+
+        let start = if self.dim1_size == 0 {
+            self.data.as_mut_ptr()
+        } else {
+            unsafe { self.data.as_mut_ptr().add(column) }
+        };
+
+        unsafe { NMutIterator::new_step(start, self.dim1_size, self.dim0_size) }
     }
 }
 
+// ===========================================================================
+// COLUMN-MAJOR (dim0 = rows, dim1 = columns)
+// ===========================================================================
+impl<T> Field<ColumnMajor, T> {
+    /// Creates a column-major field filled with clones of `value`.
+    pub fn new_fill(row_count: usize, column_count: usize, value: T) -> Self
+    where
+        T: Clone,
+    {
+        let size = element_count(row_count, column_count);
+        Self {
+            dim0_size: row_count,
+            dim1_size: column_count,
+            data: vec![value; size],
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Wraps an existing flat vector in column-major layout.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dimensions overflow `usize` or if `data.len()` is not
+    /// exactly `row_count * column_count`.
+    pub fn new_data(row_count: usize, column_count: usize, data: Vec<T>) -> Self {
+        assert_data_len(row_count, column_count, &data);
+        Self {
+            dim0_size: row_count,
+            dim1_size: column_count,
+            data,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Replaces part of a row starting at `column`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` is out of bounds, `column` is past the end of the row,
+    /// or `new_row` does not fit in the remaining columns.
+    pub fn set_row_cut(&mut self, row: usize, column: usize, new_row: &[T])
+    where
+        T: Clone,
+    {
+        assert!(row < self.dim0_size, "row index out of bounds");
+        assert!(column <= self.dim1_size, "column index out of bounds");
+        assert!(
+            new_row.len() <= self.dim1_size - column,
+            "row data exceeds remaining columns"
+        );
+
+        if new_row.is_empty() {
+            return;
+        }
+
+        unsafe {
+            let start = self
+                .data
+                .as_mut_ptr()
+                .add(row + column * self.dim0_size);
+            let mut iter = NMutIterator::new_step(start, new_row.len(), self.dim0_size);
+            iter.clone_from_slice(new_row);
+        }
+    }
+
+    /// Returns a mutable raw-pointer iterator over a row.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` is out of bounds.
+    pub fn row_mut_iterator(&mut self, row: usize) -> NMutIterator<'_, T> {
+        assert!(row < self.dim0_size, "row index out of bounds");
+
+        let start = if self.dim1_size == 0 {
+            self.data.as_mut_ptr()
+        } else {
+            unsafe { self.data.as_mut_ptr().add(row) }
+        };
+
+        unsafe { NMutIterator::new_step(start, self.dim1_size, self.dim0_size) }
+    }
+
+    /// Returns a mutable raw-pointer iterator over a column.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `column` is out of bounds.
+    pub fn column_mut_iterator(&mut self, column: usize) -> NMutIterator<'_, T> {
+        assert!(column < self.dim1_size, "column index out of bounds");
+
+        let start = if self.dim0_size == 0 {
+            self.data.as_mut_ptr()
+        } else {
+            unsafe { self.data.as_mut_ptr().add(column * self.dim0_size) }
+        };
+
+        unsafe { NMutIterator::new(start, self.dim0_size) }
+    }
+}

@@ -11,7 +11,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "lineariterator"
 version = "0.1.0"
-source = "git+https://github.com/witold-k/lineariterator.git#f1d1d5a4f27acd122cb81dea1587b54286852030"
+source = "git+https://github.com/witold-k/lineariterator.git?rev=4ab7a6eb620b85ecff6b872b9879960a8b713bfe#4ab7a6eb620b85ecff6b872b9879960a8b713bfe"
 
 [[package]]
 name = "num-traits"

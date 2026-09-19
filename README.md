@@ -1,143 +1,88 @@
-# LinearField
+# simplefield
 
-A zero-cost, type-safe two-dimensional array and slice framework written in Rust.
-It utilizes the **Type-State Pattern** and **Zero-Sized Types (ZSTs)** to enforce memory layout properties at compile time,
-eliminating runtime dispatch overhead while guaranteeing optimal CPU cache locality.
+A small Rust library for two-dimensional contiguous storage with statically selected row-major or column-major layout.
 
-## Features
+`Field<O, T>` owns its data. `RefField<'a, O, T>` provides a borrowed view over an existing slice. Layout is represented by the zero-sized marker types `RowMajor` and `ColumnMajor`, so row/column traversal can select the appropriate contiguous or strided iterator without runtime layout dispatch.
 
-* **Zero-Cost Abstractions:** Orientation strategies (`RowMajor` / `ColumnMajor`) compile down to zero bytes and completely disappear in production builds.
-* **No Runtime Branching:** Pointer arithmetic, strides, and memory jumps are evaluated at compile time rather than relying on runtime `if/else` checks.
-* **Blazing Fast Iterators:** Features zero-overhead, highly optimized `unsafe` step iterators (`NMutIterator`) tailored to the field's underlying layout.
-* **Unified Ownership Models:** Supports fully owned heap layouts (`Field<O, T>`) as well as temporary, lightweight structural references (`RefField<'a, O, T>`).
+## Layout
 
----
+The storage model uses two physical dimensions:
 
-## Architectural Overview
+- `dim0_size`: contiguous, fast-changing dimension.
+- `dim1_size`: strided, slow-changing dimension.
 
-The core architecture splits the structural memory layout (how multidimensional indexes correspond to physical memory indices) into two layers:
-
-1. **Inner Dimension (`dim0_size`):** The contiguous, fast-changing dimension. Moving along this axis changes the raw memory pointer by a stride of 1.
-2. **Outer Dimension (`dim1_size`):** The strided, slow-changing dimension. Moving along this axis skips entire blocks of the inner dimension.
-
-By abstracting memory layout via traits, the architecture maps rows and columns cleanly based on the chosen strategy:
+For row-major storage, `dim0` is the column count and `dim1` is the row count:
 
 ```text
-<--:----------- Linear Memory Sequence -----------─--->
+row 0: [C0 C1 C2 C3]
+row 1: [C0 C1 C2 C3]
 
- [Row-Major Layout]  -> dim0 = Column Index (Fast)  │  dim1 = Row Index (Slow)
-   Index Calculation: [ (row * dim0_size) + column ]
-   ┌-─ Row 0 -─┐┌-─ Row 1 -─┐
-   [C0, C1, C2, C3][C0, C1, C2, C3]...
-
- [Column-Major Layout] -> dim0 = Row Index (Fast)   │  dim1 = Column Index (Slow)
-   Index Calculation: [ (column * dim0_size) + row ]
-   ┌- Column 0 ─┐┌- Column 1 ─┐
-   [R0, R1, R2, R3][R0, R1, R2, R3]...
+index = row * column_count + column
 ```
 
-### Module Layout & Core Type Relations
+For column-major storage, `dim0` is the row count and `dim1` is the column count:
 
 ```text
-           ┌------------------─┐
-           │ trait Orientation │◀------------------------┐
-           └------------------─┘                         │
-                    ▲                                    │
-            ┌-------┴---------┐       (Binds statically) │
-            │                 │                          │
- ┌-----------------┐ ┌--------------------┐              │
- │ struct RowMajor │ │ struct ColumnMajor │              │
- └-----------------┘ └--------------------┘              │
-            ▲                 ▲                          │
-            └-------┬---------┘                          │
-                    │ (Determines Layout Strategy)       │
-                    ▼                                    │
- ┌----------------------------------------------------┐  │
- │ struct Field<O: Orientation, T>                    │--┘
- ├----------------------------------------------------┤
- │ - dim0_size: usize  (Contiguous / Inner Dimension) │
- │ - dim1_size: usize  (Strided    / Outer Dimension) │
- │ - data: Vec<T>                                     │
- └----------------------------------------------------┘
+column 0: [R0 R1 R2]
+column 1: [R0 R1 R2]
+
+index = column * row_count + row
 ```
 
----
+A `Field` always contains exactly `row_count * column_count` initialized elements. Constructors reject inconsistent shapes and dimension overflow.
 
-## 🛠️ Components
-
-### 1. The `orientation` Module
-Defines compile-time structural markers. It uses `OrientationEnum` if your application requires runtime reflection or serialization boundaries.
+## Usage
 
 ```rust
-pub trait Orientation: Clone + Copy + std::fmt::Debug {}
-pub struct RowMajor;    // C-Style
-pub struct ColumnMajor; // Fortran-Style
+use simplefield::field::Field;
+use simplefield::orientation::{ColumnMajor, RowMajor};
+
+let mut row_major = Field::<RowMajor, f32>::new_fill(3, 4, 0.0);
+let column_major = Field::<ColumnMajor, f32>::new_fill(3, 4, 0.0);
+
+row_major.set_row_cut(1, 1, &[1.0, 2.0]);
+
+for value in &mut row_major.column_mut_iterator(1) {
+    // NMutIterator exposes raw pointers; dereferencing them is explicit.
+    unsafe { *value += 1.0 };
+}
+
+assert_eq!(row_major.get_data().len(), 12);
+assert_eq!(column_major.get_data().len(), 12);
 ```
 
-### 2. The `field` Module (`Field<O, T>`)
-The owned container managing heap allocation (`Vec<T>`). Implementation methods are isolated using Rust's trait-specialization system to present different initializer arguments and step calculations based on structural demands.
+The mutable row and column iterators are provided by
+[`lineariterator`](https://github.com/witold-k/lineariterator). Depending on the selected layout, traversal is either contiguous or uses the corresponding row/column stride.
 
-### 3. The `reffield` Module (`RefField<'a, O, T>`)
-A structural window over an external data vector. It allows borrowing massive data sets while maintaining zero-overhead, layout-safe accessors.
+## Borrowed views
 
----
-
-## Quick Start & Usage Examples
-
-### 1. Instantiating Fields with Different Layouts
+`RefField` accepts any slice with the exact size implied by its dimensions:
 
 ```rust
-use linearfield::field::Field;
-use linearfield::orientation::{RowMajor, ColumnMajor};
+use simplefield::orientation::ColumnMajor;
+use simplefield::reffield::RefField;
 
-// Instantiate a RowMajor Matrix (3 Rows, 4 Columns)
-// Contiguous index is the column index
-let mut row_field: Field<RowMajor, f32> = Field::new_fill(3, 4, 0.0);
+let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+let view = RefField::<ColumnMajor, _>::new(3, 2, &data);
 
-// Instantiate a ColumnMajor Matrix (3 Rows, 4 Columns)
-// Contiguous index is the row index
-let mut col_field: Field<ColumnMajor, f32> = Field::new_fill(3, 4, 0.0);
+assert_eq!(view.get_row_count(), 3);
+assert_eq!(view.get_column_count(), 2);
+assert_eq!(view.get_data(), &data);
 ```
 
-### 2. Working with Layout-Aware Iterators
+## Design
 
-Thanks to the static type dispatching system, requesting a column or row iterator runs highly specialized pointer algorithms completely stripped of conditional branches:
+- Row-major and column-major layout are selected through compile-time marker types.
+- Storage is a single contiguous `Vec<T>`.
+- Public constructors maintain the field shape invariant.
+- Bounds are checked before internal raw-pointer arithmetic.
+- Low-level strided traversal is delegated to `lineariterator`.
+- The library intentionally stays small rather than providing a general ndarray/tensor API.
 
-```rust
-use linearfield::field::Field;
-use linearfield::orientation::RowMajor;
+## Testing
 
-let mut field = Field::new_fill(5, 5, 1.0);
+Tests live under `tests/` and use the source filename with a `_test.rs` suffix where applicable. Run the project checks with:
 
-// Iterating a row on a RowMajor matrix runs sequentially (Stride = 1)
-let row_iter = field.row_mut_iterator(2);
-
-// Iterating a column on a RowMajor matrix automatically steps dynamically (Stride = dim0_size)
-let col_iter = field.column_mut_iterator(1);
+```text
+just build
 ```
-
-### 3. Creating Zero-Copy Reference Views
-
-If you receive flat linear vectors from network sockets, files, or external C-FFI boundaries, wrap them dynamically into a `RefField`:
-
-```rust
-use linearfield::reffield::RefField;
-use linearfield::orientation::ColumnMajor;
-
-let raw_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-
-// Map data as a 4x2 Column-Major viewing window safely
-let view = RefField::new(ColumnMajor, 4, 2, &raw_data);
-
-println!("Inner Dimension (Rows): {}", view.get_row_count());
-```
-
----
-
-## Performance Guarantees
-
-* **Monomorphization:** The Rust compiler clones the machine instructions for every variation of `Field<O, T>`. Your assembly instructions will directly load hardcoded calculations
-    rather than evaluating layout logic fields repeatedly inside your performance loops.
-* **Vectorization-Friendly:** Contiguous memory sweeps (such as column iteration in `ColumnMajor` or row iteration in `RowMajor`)
-    are cleanly structured to enable automatic SIMD optimizations by LLVM.
-

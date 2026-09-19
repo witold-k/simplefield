@@ -8,5 +8,5 @@ edition = "2024"
 # struct_extractors = { version = "0.1.0", path = "../struct_extractors" }
 struct_extractors = { version = "0.1.0", git = "https://github.com/witold-k/struct_extractors" }
 # lineariterator = { version = "0.1.0", path = "../lineariterator" }
-lineariterator = { version = "0.1.0", git = "https://github.com/witold-k/lineariterator.git" }
+lineariterator = { version = "0.1.0", git = "https://github.com/witold-k/lineariterator.git", rev = "4ab7a6eb620b85ecff6b872b9879960a8b713bfe" }
 
